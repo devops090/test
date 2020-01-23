@@ -1,1 +1,63 @@
-hello 
+#!/bin/bash                                                                                                                                                                                                                                              
+
+GITHUB_TOKEN="d75d1f9ed832db50e3317b737313ff90f26a21a6"
+GITHUB_API_REST="/users/devops090/repos"
+GITHUB_API_HEADER_ACCEPT="Accept: application/vnd.github.v3+json"                                                                                                                                                          
+last_page=`curl -s -I "https://api.github.com${GITHUB_API_REST}" -H "${GITHUB_API_HEADER_ACCEPT}" -H "Authorization: token $GITHUB_TOKEN" | grep '^Link:' | sed -e 's/^Link:.*page=//g' -e 's/>.*$//g'`
+
+
+function checkDaysOfCommit {
+  name_repo=$1
+  name_branch=$2
+	dateformat=$(curl -u XXXXX:02372b4d3dbf6693e1e89405dba279871a45d7ea -X GET https://api.github.com/repos/XXDevops/"$name_repo"/commits/"$name_branch" | grep "date" | sed '/date/!d' | sed s/\"date\"://g | sed s/\"//g | sed 's/ //g' | head -n1)
+	convertDate=$(echo $dateformat | cut -d' ' -f 1)
+  Todate=$(date -d "$convertDate" +'%s')
+  current=$(date +'%s')
+	day=$(( ( $current - $Todate )/60/60/24 ))
+	if [ "$day" -gt 90 ]; then
+		echo "$name_repo","$name_branch","$dateformat","$day-days ago" &>> ./final_repo_branch_date_list.csv
+	fi
+}
+
+function eachBranch {
+    arr=("$@")
+    while IFS=',' read -r f1 f2; do
+      name_repo="$f1"
+      name_branch="$f2"
+      checkDaysOfCommit "$name_repo" "$name_branch" &
+    done < <(printf '%s\n' "${arr[@]}")
+}
+
+function subBranches {
+  repoName=$1
+  branch_last_page=$2
+  # check $name in below lines 37 and 41
+  if [ -z "$branch_last_page" ]; then
+      branch="$(curl -u XXXXX:02372b4d3dbf6693e1e89405dba279871a45d7ea -X GET https://api.github.com/repos/XXDevops/"$repoName"/branches | sed -e 's/[{}]/''/g' | grep "name" | sed 's/name/'"$name"'/g' | sed s/\"//g | sed s/\,//g | sed 's/:/,/g' | sed 's/ //g' | grep -v master | sed 's/origin\///' | xargs -n1)"
+      eachBranch "${branch[@]}"
+  else                                                                                                                                                                                                            
+      for seq in `seq 1 $branch_last_page`; do
+          branch="$(curl -u XXXXX:02372b4d3dbf6693e1e89405dba279871a45d7ea -X GET https://api.github.com/repos/XXDevops/"$repoName"/branches?page="$seq" | sed -e 's/[{}]/''/g' | grep "name" | sed 's/name/'"$name"'/g' | sed s/\"//g | sed s/\,//g | sed 's/:/,/g' | sed 's/ //g' | grep -v master | sed 's/origin\///' | xargs -n1)"
+          eachBranch "${branch[@]}"
+      done
+  fi
+}
+
+function repoList {
+  repolist="$(curl -i https://api.github.com/orgs/XXDevops/repos?page=$1 -u XXXX:02372b4d3dbf6693e1e89405dba279871a45d7ea | sed -e 's/[{}]/''/g' | grep "name" | sed '/name/!d' | sed s/\"name\"://g | sed s/\"//g | sed s/\,//g | sed '/full_name/d' | sed '/labels_url/d' | xargs -n1)"
+  
+  while read -r repoName; do
+
+    branch_last_page=`curl -s -I "https://api.github.com/repos/XXDevops/"$repoName"/branches" -H "${GITHUB_API_HEADER_ACCEPT}" -H "Authorization: token $GITHUB_TOKEN" | grep '^Link:' | sed -e 's/^Link:.*page=//g' -e 's/>.*$//g'`
+    subBranches "$repoName" "$branch_last_page" &
+
+  done < <(printf '%s\n' "$repolist")
+}
+                                                                                                                                                                                                                  
+if [ -z "$last_page" ]; then
+    repoList 1
+else                                                                                                                                                                                                            
+    for p in `seq 1 $last_page`; do
+        repoList $P &
+    done
+fi
