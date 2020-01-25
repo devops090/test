@@ -1,57 +1,60 @@
 #!/bin/bash                                                                                                                                                                                                                                              
 
-GITHUB_TOKEN="87694b44878a403241c10cca13902a2ba95f132d"
+GITHUB_TOKEN="9b44d45b97be33dd05fd5611b98b188dd7da1b26"
 GITHUB_API_REST="/users/devops090/repos"
 
 GITHUB_API_HEADER_ACCEPT="Accept: application/vnd.github.v3+json"
 
-function subBranches {
+function checkDaysOfCommit {
   name_repo=$1
   name_branch=$2
-	dateformat=$(curl -s https://api.github.com/repos/devops090/"$name_repo"/commits/"$name_branch" | grep "date" | sed '/date/!d' | sed s/\"date\"://g | sed s/\"//g | sed 's/ //g' | head -n1)
-	convertDate=$(echo $dateformat | cut -d' ' -f 1)
-  Todate=$(date -d "$convertDate" +'%s')
-  current=$(date +'%s')
-	day=$(( ( $current - $Todate )/60/60/24 ))
-	if [ "$day" -gt 90 ]; then
-		echo "$name_repo","$name_branch","$dateformat","$day-days ago" &>> ./final_repo_branch_date_list.csv
-	fi
-}
-
-function each_branch {
-  subbranches=$(curl -s $1 -H "${GITHUB_API_HEADER_ACCEPT}" -H "Authorization: token $GITHUB_TOKEN" | grep '"name":' | sed -e 's/^.*": "//g' -e 's/",.*$//g' | grep -v 'master')
-    while read -r subBranchName; do
-      if [ -z "$subBranchName" ]; then
-      subBranches $2 $subBranchName &
-      fi
-    done < <(printf '%s\n' "$subbranches")
-
-}
-
-function sub_branch {
-  repoName=$1
-  sub_branch_last_page=`curl -s -I "https://api.github.com/repos/devops090/"$repoName"/branches" -H "${GITHUB_API_HEADER_ACCEPT}" -H "Authorization: token $GITHUB_TOKEN" | grep '^Link:' | sed -e 's/^Link:.*page=//g' -e 's/>.*$//g'`
-  if [ -z "$sub_branch_last_page" ]; then                                                                                                                                                                                                          
-    each_branch "https://api.github.com/repos/devops090/"$repoName"/branches" "$repoName"
-  else                                                                                                                                                                                                            
-      for p in `seq 1 $sub_branch_last_page`; do
-        each_branch "https://api.github.com/repos/devops090/"$repoName"/branches?page=$p" "$repoName" &
-      done
+    
+  if [ ! -z "$name_branch" ]; then
+    dateformat=$(curl -s https://api.github.com/repos/devops090/"$name_repo"/commits/"$name_branch" | grep "date" | sed '/date/!d' | sed s/\"date\"://g | sed s/\"//g | sed 's/ //g' | head -n1)
+    convertDate=$(echo $dateformat | cut -d' ' -f 1)
+    Todate=$(date -d "$convertDate" +'%s')
+    current=$(date +'%s')
+    day=$(( ( $current - $Todate )/60/60/24 ))
+    if [ "$day" -gt 90 ]; then
+    	echo "$name_repo","$name_branch","$dateformat","$day-days ago" &>> ./final_repo_branch_date_list.csv
+    fi
   fi
 }
 
-function rest_call {
+function each_branch {
+    rName=$2
+    sub_branches=$(curl -s $1 -H "${GITHUB_API_HEADER_ACCEPT}" -H "Authorization: token $GITHUB_TOKEN" | grep '"name":' | sed -e 's/^.*": "//g' -e 's/",.*$//g' | grep -v 'master')
+    
+    while IFS=' ' read -r sBranchName; do
+      checkDaysOfCommit ${rName} ${sBranchName} &
+    done < <(printf '%s\n' "$sub_branches")
+}
+
+function branch_list {
+  repoName=$1
+  sub_branch_last_page=`curl -s -I "https://api.github.com/repos/devops090/"$repoName"/branches" -H "${GITHUB_API_HEADER_ACCEPT}" -H "Authorization: token $GITHUB_TOKEN" | grep '^Link:' | sed -e 's/^Link:.*page=//g' -e 's/>.*$//g'`
+  if [ -z "$sub_branch_last_page" ]; then                                                                                                                                                                                                          
+    each_branch "https://api.github.com/repos/devops090/"${repoName}"/branches" "${repoName}"
+  else                                                                                                                                                                                                           
+      for p in `seq 1 $sub_branch_last_page`; do
+        each_branch "https://api.github.com/repos/devops090/"${repoName}"/branches?page=$p" "${repoName}" &
+      done 
+  fi
+}
+
+function repo_call {
   repos=$(curl -s $1 -H "${GITHUB_API_HEADER_ACCEPT}" -H "Authorization: token $GITHUB_TOKEN" | grep '"name":' | sed -e 's/^.*": "//g' -e 's/",.*$//g' | sort)
   while read -r repoName; do
-    sub_branch $repoName &
+    branch_list $repoName &  
   done < <(printf '%s\n' "$repos")
 }
                                                                                                                                                
 last_page=`curl -s -I "https://api.github.com${GITHUB_API_REST}" -H "${GITHUB_API_HEADER_ACCEPT}" -H "Authorization: token $GITHUB_TOKEN" | grep '^Link:' | sed -e 's/^Link:.*page=//g' -e 's/>.*$//g'`
+
 if [ -z "$last_page" ]; then                                                                                                                                                                                                          
-    rest_call "https://api.github.com${GITHUB_API_REST}"
+    repo_call "https://api.github.com${GITHUB_API_REST}"
 else                                                                                                                                                                                                            
     for p in `seq 1 $last_page`; do
-        rest_call "https://api.github.com${GITHUB_API_REST}?page=$p" &
+       repo_call "https://api.github.com${GITHUB_API_REST}?page=$p" &
     done
 fi
