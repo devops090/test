@@ -1,32 +1,45 @@
 #!/bin/bash                                                                                                                                                                                                                                              
 
-GITHUB_TOKEN="699a04d0a985a6e3a04855924d9d684345593ee1"
+GITHUB_TOKEN="6b89331228c4d22cef2bcaf1424a51d968195a38"
 GITHUB_API_REST="/users/devops090/repos"
 
 GITHUB_API_HEADER_ACCEPT="Accept: application/vnd.github.v3+json"
 
 pids=""
 
+
+# set -eux
+wait-for-url() {
+    echo "Testing $1"
+  # timeout -s TERM 300 
+    bash -c \
+    'while [[ "$(curl -s -o /dev/null -L -w ''%{http_code}'' ${0})" != "200" ]];\
+    do echo "Waiting for ${0}" && sleep 5;\
+    done' ${1}
+    echo "OK!"
+    curl -I $1
+}
+
 function checkDaysOfCommit {
   name_repo=$1
   name_branch=$2
-    
-  if [ ! -z "$name_branch" ]; then
-    dateformat=$(curl -s https://api.github.com/repos/devops090/"$name_repo"/commits/"$name_branch" | grep "date" | sed '/date/!d' | sed s/\"date\"://g | sed s/\"//g | sed 's/ //g' | head -n1)
-    convertDate=$(echo $dateformat | cut -d' ' -f 1)
-    Todate=$(date -d "$convertDate" +'%s')
-    current=$(date +'%s')
-    day=$(( ( $current - $Todate )/60/60/24 ))
-    if [ "$day" -gt 90 ]; then
-    	echo "$name_repo","$name_branch","$dateformat","$day-days ago" &>> ./final_repo_branch_date_list.csv
-    fi
+  wait-for-url "https://api.github.com/repos/devops090/$name_repo/commits/$name_branch"
+  dateformat=$(curl -s https://api.github.com/repos/devops090/"$name_repo"/commits/"$name_branch" | grep "date" | sed '/date/!d' | sed s/\"date\"://g | sed s/\"//g | sed 's/ //g' | head -n1)
+  convertDate=$(echo $dateformat | cut -d' ' -f 1)
+  Todate=$(date -d "$convertDate" +'%s')
+  current=$(date +'%s')
+  day=$(( ( $current - $Todate )/60/60/24 ))
+  if [ "$day" -gt 1 ]; then
+    echo "$name_repo","$name_branch","$dateformat","$day-days ago" &>> ./final_repo_branch_date_list.csv
   fi
 }
 
 function each_branch {
     rName=$2
+
+    wait-for-url $1
     sub_branches=$(curl -s $1 -H "${GITHUB_API_HEADER_ACCEPT}" -H "Authorization: token $GITHUB_TOKEN" | grep '"name":' | sed -e 's/^.*": "//g' -e 's/",.*$//g' | grep -v 'master')
-    
+    sleep 5
     while IFS=' ' read -r sBranchName; do
       checkDaysOfCommit ${rName} ${sBranchName} &
       pids+=" $!"
@@ -35,11 +48,15 @@ function each_branch {
 
 function branch_list {
   repoName=$1
+
+  wait-for-url "https://api.github.com/repos/devops090/"$repoName"/branches" 
   sub_branch_last_page=`curl -s -I "https://api.github.com/repos/devops090/"$repoName"/branches" -H "${GITHUB_API_HEADER_ACCEPT}" -H "Authorization: token $GITHUB_TOKEN" | grep '^Link:' | sed -e 's/^Link:.*page=//g' -e 's/>.*$//g'`
-  if [ -z "$sub_branch_last_page" ]; then                                                                                                                                                                                                          
+  
+  if [ -z "$sub_branch_last_page" ]; then                                                                                                                                                                                                       
     each_branch "https://api.github.com/repos/devops090/"${repoName}"/branches" "${repoName}"
   else                                                                                                                                                                                                           
       for p in `seq 1 $sub_branch_last_page`; do
+        sleep 1
         each_branch "https://api.github.com/repos/devops090/"${repoName}"/branches?page=$p" "${repoName}" &
         pids+=" $!"
       done 
@@ -47,23 +64,35 @@ function branch_list {
 }
 
 function repo_call {
+  wait-for-url $1 
   repos=$(curl -s $1 -H "${GITHUB_API_HEADER_ACCEPT}" -H "Authorization: token $GITHUB_TOKEN" | grep '"name":' | sed -e 's/^.*": "//g' -e 's/",.*$//g' | sort)
   while read -r repoName; do
     branch_list $repoName &  
     pids+=" $!"
   done < <(printf '%s\n' "$repos")
 }
-                                                                                                                                               
-last_page=`curl -s -I "https://api.github.com${GITHUB_API_REST}" -H "${GITHUB_API_HEADER_ACCEPT}" -H "Authorization: token $GITHUB_TOKEN" | grep '^Link:' | sed -e 's/^Link:.*page=//g' -e 's/>.*$//g'`
 
-if [ -z "$last_page" ]; then                                                                                                                                                                                                          
-    repo_call "https://api.github.com${GITHUB_API_REST}"
-else                                                                                                                                                                                                            
-    for p in `seq 1 $last_page`; do
-       repo_call "https://api.github.com${GITHUB_API_REST}?page=$p" &
-       pids+=" $!"
-    done
-fi
+function init {
+  last_page=`curl -s -I "https://api.github.com${GITHUB_API_REST}" -H "${GITHUB_API_HEADER_ACCEPT}" -H "Authorization: token $GITHUB_TOKEN" | grep '^Link:' | sed -e 's/^Link:.*page=//g' -e 's/>.*$//g'`
+  echo $last_page
+
+  if [ -z "$last_page" ]; then                                                                                                                                                                                                          
+      repo_call "https://api.github.com${GITHUB_API_REST}"
+  else                                                                                                                                                                                                            
+      for p in `seq 1 $last_page`; do
+        repo_call "https://api.github.com${GITHUB_API_REST}?page=$p" &
+        pids+=" $!"
+      done
+  fi
+
+  for pid in ${pids[*]}; do
+      wait $pid
+  done
+
+}
+
+wait-for-url "https://api.github.com${GITHUB_API_REST}" 
+init
 
 for pid in ${pids[*]}; do
     wait $pid
